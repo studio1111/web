@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Full Background Scroll Scrub</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html {
+    overflow-x: hidden;
+  }
+
+  body {
+    background: #000000;
+  }
+
+  .scroll-track {
+    position: relative;
+    height: 600vh; /* طول کل اسکرول - هرچی بیشتر، کندتر و کش‌دارتر */
+  }
+
+  .sticky-stage {
+    position: sticky;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: #000000;
+  }
+
+  .loading {
+    position: fixed;
+    inset: 0;
+    background: #000;
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: system-ui, sans-serif;
+    font-size: 0.8rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    z-index: 999;
+    transition: opacity 0.5s ease;
+    gap: 12px;
+  }
+
+  .loading.hide { opacity: 0; pointer-events: none; }
+
+  .loading-track {
+    width: 200px;
+    height: 2px;
+    background: #333;
+  }
+
+  .loading-fill {
+    height: 100%;
+    background: #fff;
+    width: 0%;
+    transition: width 0.15s ease;
+  }
+
+  .progress-rail {
+    position: fixed;
+    top: 0; left: 0;
+    height: 3px;
+    background: rgba(255,255,255,0.85);
+    width: 0%;
+    z-index: 998;
+  }
+</style>
+</head>
+<body>
+
+<div class="loading" id="loading">
+  <div id="loadingText">در حال بارگذاری… 0%</div>
+  <div class="loading-track"><div class="loading-fill" id="loadingFill"></div></div>
+</div>
+<div class="progress-rail" id="progressRail"></div>
+
+<div class="scroll-track" id="scrollTrack">
+  <div class="sticky-stage">
+    <canvas id="canvas"></canvas>
+  </div>
+</div>
+
+<script>
+(function () {
+  // ====================================================
+  // فقط این تنظیمات رو عوض کن
+  // پوشه‌ی فریم‌ها همیشه اسمش "frames" است
+  // (خروجی استخراج از فیلم منبع به نام film.mp4)
+  // ====================================================
+  const CONFIG = {
+    folder: 'frames',
+    totalFrames: 152,
+    prefix: 'frame_',
+    extension: '.jpg',
+    padLength: 6,               // frame_000001.jpg ... frame_000152.jpg
+    smoothness: 0.18            // نرمی حرکت بین فریم‌ها
+  };
+  // ====================================================
+
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const scrollTrack = document.getElementById('scrollTrack');
+  const loading = document.getElementById('loading');
+  const loadingText = document.getElementById('loadingText');
+  const loadingFill = document.getElementById('loadingFill');
+  const progressRail = document.getElementById('progressRail');
+
+  const images = new Array(CONFIG.totalFrames);
+  let loadedCount = 0;
+  let firstReady = false;
+
+  let targetFrame = 0;
+  let smoothFrame = 0;
+
+  function frameSrc(index) {
+    const num = String(index + 1).padStart(CONFIG.padLength, '0');
+    return `${CONFIG.folder}/${CONFIG.prefix}${num}${CONFIG.extension}`;
+  }
+
+  function loadFrame(index) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => { images[index] = img; loadedCount++; resolve(img); };
+      img.onerror = () => { loadedCount++; resolve(null); };
+      img.src = frameSrc(index);
+    });
+  }
+
+  function resizeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    canvas.width = vw * dpr;
+    canvas.height = vh * dpr;
+    canvas.style.width = vw + 'px';
+    canvas.style.height = vh + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  // ترکیب دو فریم مجاور با شفافیت (crossfade) برای نرمی بیشتر
+  // و نمایش cover که خودکار با هر اندازه صفحه (دسکتاپ یا موبایل) تنظیم می‌شه
+  function drawBlended(frameFloat) {
+    const total = CONFIG.totalFrames;
+    const lower = Math.floor(frameFloat);
+    const upper = Math.min(total - 1, lower + 1);
+    const t = frameFloat - lower;
+
+    const imgA = images[lower];
+    if (!imgA) return;
+
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    function drawCover(img, alpha) {
+      const scale = Math.max(vw / img.naturalWidth, vh / img.naturalHeight);
+      const dw = img.naturalWidth * scale;
+      const dh = img.naturalHeight * scale;
+      const dx = (vw - dw) / 2;
+      const dy = (vh - dh) / 2;
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(img, dx, dy, dw, dh);
+    }
+
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, vw, vh);
+
+    drawCover(imgA, 1);
+    const imgB = images[upper];
+    if (imgB && t > 0.01) drawCover(imgB, t);
+    ctx.globalAlpha = 1;
+  }
+
+  async function loadAll() {
+    const first = await loadFrame(0);
+    if (first) {
+      resizeCanvas();
+      drawBlended(0);
+      firstReady = true;
+      loading.classList.add('hide');
+    }
+
+    for (let i = 1; i < CONFIG.totalFrames; i++) {
+      await loadFrame(i);
+      const percent = Math.round((loadedCount / CONFIG.totalFrames) * 100);
+      loadingFill.style.width = percent + '%';
+      loadingText.textContent = `در حال بارگذاری… ${percent}%`;
+    }
+  }
+
+  function getProgress() {
+    const scrollableHeight = scrollTrack.offsetHeight - window.innerHeight;
+    const scrolled = window.scrollY;
+    let p = scrollableHeight > 0 ? scrolled / scrollableHeight : 0;
+    return Math.max(0, Math.min(1, p));
+  }
+
+  window.addEventListener('scroll', () => {
+    if (!firstReady) return;
+    const progress = getProgress();
+    progressRail.style.width = (progress * 100) + '%';
+    targetFrame = progress * (CONFIG.totalFrames - 1);
+  }, { passive: true });
+
+  window.addEventListener('resize', resizeCanvas);
+
+  function loop() {
+    if (firstReady) {
+      const diff = targetFrame - smoothFrame;
+      if (Math.abs(diff) > 0.005) {
+        smoothFrame += diff * CONFIG.smoothness;
+      } else {
+        smoothFrame = targetFrame;
+      }
+      smoothFrame = Math.max(0, Math.min(CONFIG.totalFrames - 1, smoothFrame));
+      drawBlended(smoothFrame);
+    }
+    requestAnimationFrame(loop);
+  }
+
+  loadAll();
+  requestAnimationFrame(loop);
+})();
+</script>
+
+</body>
+</html>
